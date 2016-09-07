@@ -1,0 +1,170 @@
+---
+title: "Impact of weather events to health and economy, across the United States"
+author: "Martin Haneferd"
+date: "2 september 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Synopsis
+This report indicates which weather type event that creates the biggest economic consequenses and have the biggest impact to public health across The United States of America.
+The data used for prosessing is provided by NOAA storm database. The data are in this report aggregated by the event type for damage and health indicators.
+The result set shows that the the Tornado type of event, have biggect impact for the public health, and Flood has the biggest impact on economy.
+The end result of the report has two graphs displaying the fifteen event types that have biggest impact on health and economy.
+
+<p></p>
+##Data Processing
+
+###Extract and load the data, and if needed download the data required:
+This Code section will take some minutes.
+If the StormData.csv.bz2 file does not exists. The data is downloaded. The downloaded file is of type "bz2", so the bunzip2 within package R.utils will be used to extract the file before reading it into the dfStorm dataset.
+```{r, message=FALSE,warning=FALSE}
+# Check if file exists, if not download file, and extract it:
+if (!file.exists("StormData.csv.bz2")) {
+      library(curl)
+      
+      download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2",destfile = "StormData.csv.bz2", method = "libcurl")
+      
+}
+
+#Extract file
+library(R.utils)
+bunzip2("StormData.csv.bz2", "stormdata.csv", remove = FALSE, overwrite = TRUE) # Unzip file
+
+#Read file:
+dfStorm <- read.csv("stormdata.csv", stringsAsFactors = FALSE)
+```
+<p></p>
+###Preparing the data for analyzis.
+Following code section will tidy, calculate, arrange and create two dataset which will answer the two questions. The two dataset created is the 15 worst values for injuries/fatalities and damage values
+
+The code section extract only the columns that are to be use to answer the question asked, and reuse the dfStorm dataset.
+Then for the damage value for properties and Crops, the values needs to be calculated with the exponetional factors provided. The exponetional factors are provided in the variables: 
+CROPDMGEXP and PROPDMGEXP.
+
+The exponentional factors used to calculate the actual damage values in USD are intrepeted as  following
+
+* B or b = Billion (10^9)
+* M or m = Million (10^6)
+* K or k = Thousand (10^3)
+* H or h = Hundred (10^2)
+* The number from one to ten represent the power of ten (10^The number). 
+* The symbols "-", "+" and "?" refers to less than, greater than and low certainty. These symbols are ignored.
+
+The dfStorm dataset is increased with two extra columns (VALUEPROPDMG and VALUECROPDMG), which is the actual value in PROPDMG and CROPDMG variables multiplied by the 10^ factor from the CROPDMGEXP and PROPDMGEXP variables.
+
+For the result section a new aggregated dataset is created with the sum of the damage based on the event type. The 15 worst event will be selected out in this dataset.
+
+At the end a dataset for injuries and fatalities will be created using tha aggregate function. The aggregation will be based on the event type variable. The 15 worst event will be selected out in this dataset.
+
+Both the 15'worst datasets are melted (by using the reshape2 package), so it can easily beeing used with stacked bars with geom_bar (ggplot2 package)
+
+```{r, message=FALSE,warning=FALSE}
+library(dplyr)
+# Select only neccesary variables:
+dfStorm <- select(dfStorm, EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP)
+
+# create a dataframe with the exp factors to be multiplied with damage value.
+expFactor <- data.frame(c("","B","m","M","K","H","h", "1","2","3","4","5","6","7","8","0","+","-","?","k"),
+                        c(1,1e+09,1e+06,1e+06,1000,100,100,10,100,1000,10000,1e+05,1e+06,1e+07,1e+08,
+                          1,0,0,0,1000))
+
+# Use vector and parse trough them instead of dataframe for faster execution:
+vPropDmg <- dfStorm$PROPDMG
+rows <- length(vPropDmg)
+vPropDmgExp <- dfStorm$PROPDMGEXP
+VALUEPROPDMG <- 1:rows
+VALUECROPDMG <- 1:rows
+vCropDmg <- dfStorm$CROPDMG
+vCropDmgExp <- dfStorm$CROPDMGEXP
+# Parse trough the dataset and multiply with exp factors.
+for(i in 1:rows){
+      VALUEPROPDMG[i] <- vPropDmg[i] * expFactor[expFactor[,1] == vPropDmgExp[i],2]
+      VALUECROPDMG[i] <- vCropDmg[i] * expFactor[expFactor[,1] == vCropDmgExp[i],2]
+}
+dfStorm <- cbind(dfStorm, VALUEPROPDMG) # Add variable containing property damage amount in USD
+dfStorm <- cbind(dfStorm, VALUECROPDMG) # Add variable containing crop damage amount in USD
+
+# Aggregate the amount of the damage by the event type. Then Summarise the damage amount and arrange by highest values and then filter out the 15 worst event types. 
+dfDamageAmount <- aggregate(cbind(VALUEPROPDMG , VALUECROPDMG) ~ EVTYPE, data = dfStorm, sum)
+dfDamageAmount$SUM <- dfDamageAmount$VALUEPROPDMG + dfDamageAmount$VALUECROPDMG
+dfDamageAmount <- arrange(dfDamageAmount, desc(SUM))
+dfDamageAmount <- dfDamageAmount[1:15,] # Pick the 15 worst event types.
+
+# Make data useful for stacked bars:
+library(reshape2)
+dfd <- dfDamageAmount
+dfd$SUM <- NULL
+names(dfd) <- c("EVTYPE","Property damage","Crop damage")
+mdfd <- melt(dfd, id.vars = "EVTYPE")
+mdfd <- arrange(mdfd, desc(value))
+mdfd$EVTYPE <- factor(mdfd$EVTYPE) # change to factor.
+
+
+# Create the Injury and fatalities dataset to answer one of the questions asked.
+# Summries the total and pick the 15 event types with highest number. (Using arrange to sort out the highest values)
+dfInjuryAndFatalities <- aggregate(cbind(FATALITIES , INJURIES) ~ EVTYPE, data = dfStorm, sum)
+dfInjuryAndFatalities$SUM <- dfInjuryAndFatalities$FATALITIES + dfInjuryAndFatalities$INJURIES
+dfInjuryAndFatalities <- arrange(dfInjuryAndFatalities, desc(SUM))
+dfInjuryAndFatalities <- dfInjuryAndFatalities[1:15,] # Pick the 15 worst event types.
+
+# Make data useful for stacked bars:
+dfi <- dfInjuryAndFatalities
+dfi$SUM <- NULL
+names(dfi) <- c("EVTYPE","Fatalities","Injuries")
+mdfi <- melt(dfi, id.vars = "EVTYPE")
+mdfi <- arrange(mdfi, desc(value))
+mdfi$EVTYPE <- factor(mdfi$EVTYPE) # change to factor.
+
+
+```
+
+<p></p>
+## Results
+<p></p>
+### Impact of the event type to public health across United States
+The data shows clearly that the Tornado event type creates the most Fatalities and Injuries.
+<p></p>
+```{r,message=FALSE,warning=FALSE}
+# plot the stuff:
+library(ggplot2)
+ggplot(mdfi, aes(x = reorder(EVTYPE, -value),y = value, fill=variable)) +
+      geom_bar( stat = "identity") + theme_bw() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      ggtitle("15 worst event types by fatalities and injuries") +
+      labs(x="Event type",y="Number of persons")
+```
+<p></p>
+<p></p>
+<p></p>
+####Table displaying the top 5 values
+```{r}
+head(dfInjuryAndFatalities,5)
+```
+<p></p>
+<p></p>
+<p></p>
+### Impact of the event type on economic consequeses across the United States.
+The data shows clearly that the Flood event type makes the biggest economic consequense.
+<p></p>
+```{r,message=FALSE,warning=FALSE}
+# plot the stuff:
+options(scipen=999) # Get rid of scientific notation
+ggplot(mdfd, aes(x = reorder(EVTYPE, -value),y = value, fill=variable)) +
+      geom_bar( stat = "identity") + theme_bw() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      ggtitle("15 worst event types by economic consequenses") +
+      labs(x="Event type",y="US Dollars") 
+
+```
+<p></p>
+<p></p>
+<p></p>
+####Table displaying the top 5 values
+```{r}
+head(dfDamageAmount,5)
+```
+
